@@ -13,6 +13,23 @@
 *	See the License for the specific language governing permissions and
 *	limitations under the License.
 ******************************************************************************/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+
+#include <netinet/in.h>
+
+#include <linux/if_packet.h>
+#include <linux/if_ether.h>
+#include <linux/if_arp.h>
+
 #define MAX_SERVER_NODE 24
 #define SKU1_MAX_SERVER_NODES 24
 
@@ -195,9 +212,7 @@ unsigned monotonic_sec(void)
 //inarp "ethX" "peer mac addr(xx:xx:xx:xx:xx:xx)"
 //inarp daemon to handle inarp packets
 //inarp "ethX" "file for storing node list"
-void InvARPServerTask(
-				  /** the internal task ID of this task (in) */
-			     ULONG thread_input)
+int main(void)
 {
 	int fd, ret;
 	/*buffer for ethernet frame */
@@ -241,11 +256,6 @@ void InvARPServerTask(
 	int length = 0;		/*length of the received frame */
 	static struct ETH_ARP_PACKET *inarp_req = (struct ETH_ARP_PACKET *)buffer;	/* single packets are usually not bigger than 8192 bytes */
 	static struct ETH_ARP_PACKET inarp_resp;	/* single packets are usually not bigger than 8192 bytes */
-	static struct {
-		unsigned char dest_ip[4];
-		struct timespec update_time;
-	} node[SKU1_MAX_SERVER_NODES];
-	struct timespec current_time;
 	//argv[2]: file name used for storing node ip list
 	//                      line format in file: <node_id> <mac_addr> <ip_addr>
 	//get based address via EMS
@@ -280,7 +290,6 @@ void InvARPServerTask(
 			sleep(1);
 		}
 //              printf("length = %d\r\nfd = %d\r\n", length, fd);
-		current_time.tv_sec = (unsigned)monotonic_sec();
 		if (0 == memcmp(src_mac, inarp_req->eh.h_dest, ETH_ALEN)) {
 			if (ntohs(inarp_req->arp.ar_op) == ARPOP_InREQUEST) {	//get a inverse arp request
 //                              printf("[Rsp] InRequest\n");
