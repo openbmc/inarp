@@ -49,7 +49,7 @@ static int send_arp_packet(int fd,
 		    unsigned char *dest_mac,
 		    struct in_addr *dest_ip)
 {
-	struct sockaddr_ll socket_address;
+	struct sockaddr_ll addr;
 	struct arp_packet arp;
 	int rc;
 
@@ -58,13 +58,13 @@ static int send_arp_packet(int fd,
 	/* Prepare our link-layer address: raw packet interface,
 	 * using the ifindex interface, receiving ARP packets
 	 */
-	socket_address.sll_family = PF_PACKET;
-	socket_address.sll_protocol = htons(ETH_P_ARP);
-	socket_address.sll_ifindex = ifindex;
-	socket_address.sll_hatype = ARPHRD_ETHER;
-	socket_address.sll_pkttype = PACKET_OTHERHOST;
-	socket_address.sll_halen = ETH_ALEN;
-	memcpy(socket_address.sll_addr, dest_mac, ETH_ALEN);
+	addr.sll_family = PF_PACKET;
+	addr.sll_protocol = htons(ETH_P_ARP);
+	addr.sll_ifindex = ifindex;
+	addr.sll_hatype = ARPHRD_ETHER;
+	addr.sll_pkttype = PACKET_OTHERHOST;
+	addr.sll_halen = ETH_ALEN;
+	memcpy(addr.sll_addr, dest_mac, ETH_ALEN);
 
 	/* set the frame header */
 	memcpy(arp.eh.h_dest, dest_mac, ETH_ALEN);
@@ -86,8 +86,7 @@ static int send_arp_packet(int fd,
 
 	/* send the packet */
 	rc = sendto(fd, &arp, sizeof(arp), 0,
-			     (struct sockaddr *)&socket_address,
-			     sizeof(socket_address));
+			(struct sockaddr *)&addr, sizeof(addr));
 	if (rc < 0)
 		warn("failure sending ARP response");
 
