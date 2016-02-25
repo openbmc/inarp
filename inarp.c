@@ -104,16 +104,22 @@ static void show_mac_addr(const char *name, unsigned char *mac_addr)
 	return;
 }
 
+static int do_ifreq(int fd, unsigned long type,
+		const char *ifname, struct ifreq *ifreq)
+{
+	memset(ifreq, 0, sizeof(*ifreq));
+	strcpy(ifreq->ifr_name, ifname);
+
+	return ioctl(fd, type, ifreq);
+}
+
 static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
 {
 	struct sockaddr_in *sa;
 	struct ifreq ifreq;
 	int rc;
 
-	memset(&ifreq, 0, sizeof(ifreq));
-	strcpy(ifreq.ifr_name, ifname);
-
-	rc = ioctl(fd, SIOCGIFADDR, &ifreq);
+	rc = do_ifreq(fd, SIOCGIFADDR, ifname, &ifreq);
 	if (rc) {
 		warn("Error querying local address for %s", ifname);
 		return -1;
@@ -135,10 +141,7 @@ static int get_local_hwaddr(int fd, const char *ifname, uint8_t *addr)
 	struct ifreq ifreq;
 	int rc;
 
-	memset(&ifreq, 0, sizeof(ifreq));
-	strcpy(ifreq.ifr_name, ifname);
-
-	rc = ioctl(fd, SIOCGIFHWADDR, &ifreq);
+	rc = do_ifreq(fd, SIOCGIFHWADDR, ifname, &ifreq);
 	if (rc) {
 		warn("Error querying local MAC address");
 		return -1;
@@ -153,9 +156,7 @@ static int get_ifindex(int fd, const char *ifname, int *ifindex)
 	struct ifreq ifreq;
 	int rc;
 
-	memset(&ifreq, 0, sizeof(ifreq));
-	strcpy(ifreq.ifr_name, ifname);
-	rc = ioctl(fd, SIOCGIFINDEX, &ifreq);
+	rc = do_ifreq(fd, SIOCGIFINDEX, ifname, &ifreq);
 	if (rc < 0) {
 		warn("Error querying interface %s", ifname);
 		return -1;
