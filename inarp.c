@@ -148,6 +148,23 @@ static int get_local_hwaddr(int fd, const char *ifname, uint8_t *addr)
 	return 0;
 }
 
+static int get_ifindex(int fd, const char *ifname, int *ifindex)
+{
+	struct ifreq ifreq;
+	int rc;
+
+	memset(&ifreq, 0, sizeof(ifreq));
+	strcpy(ifreq.ifr_name, ifname);
+	rc = ioctl(fd, SIOCGIFINDEX, &ifreq);
+	if (rc < 0) {
+		warn("Error querying interface %s", ifname);
+		return -1;
+	}
+
+	*ifindex = ifreq.ifr_ifindex;
+	return 0;
+}
+
 static void usage(const char *progname)
 {
 	fprintf(stderr, "Usage: %s <interface>\n", progname);
@@ -155,7 +172,6 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
-	static struct ifreq ifreq_buffer;
 	struct arp_packet inarp_req;
 	const char *ifname;
 	ssize_t len;
@@ -183,16 +199,11 @@ int main(int argc, char **argv)
 	if (ret)
 		exit(EXIT_FAILURE);
 
+	ret = get_ifindex(fd, ifname, &ifindex);
+	if (ret)
+		exit(EXIT_FAILURE);
+
 	show_mac_addr(ifname, src_mac);
-
-	/* find the ifindex of the interface we're using */
-	memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
-	strcpy(ifreq_buffer.ifr_name, ifname);
-	ret = ioctl(fd, SIOCGIFINDEX, &ifreq_buffer);
-	if (ret < 0)
-		err(EXIT_FAILURE, "Error querying interface %s", ifname);
-
-	ifindex = ifreq_buffer.ifr_ifindex;
 
 	while (1) {
 		len = recvfrom(fd, &inarp_req, sizeof(inarp_req), 0,
