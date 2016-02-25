@@ -195,7 +195,7 @@ int main(int argc, char **argv)
 			if (ntohs(inarp_req->arp.ar_op) == ARPOP_InREQUEST) {
 
 				printf
-				    ("src mac =%02x:%02x:%02x:%02x:%02x:%02x\r\n",
+				    ("src mac =%02x:%02x:%02x:%02x:%02x:%02x\n",
 				     inarp_req->src_mac[0],
 				     inarp_req->src_mac[1],
 				     inarp_req->src_mac[2],
@@ -203,7 +203,7 @@ int main(int argc, char **argv)
 				     inarp_req->src_mac[4],
 				     inarp_req->src_mac[5]
 				    );
-				printf("src ip = %s\r\n",
+				printf("src ip = %s\n",
 						inet_ntoa(inarp_req->src_ip));
 				int fd_1;
 				fd_1 = socket(AF_PACKET, SOCK_RAW, 0);
