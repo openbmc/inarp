@@ -32,11 +32,6 @@
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 
-#define ETH_ARP_FRAME_LEN ( \
-	sizeof(struct ethhdr) + \
-	sizeof(struct arphdr) + \
-	((ETH_ALEN + sizeof(struct in_addr)) * 2))
-
 struct arp_packet {
 	struct ethhdr eh;
 	struct arphdr arp;
@@ -142,10 +137,10 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
-	/*buffer for ethernet frame */
-	static unsigned char buffer[ETH_FRAME_LEN];
 	static struct ifreq ifreq_buffer;
+	struct arp_packet inarp_req;
 	const char *ifname;
+	ssize_t len;
 	int fd, ret;
 
 	if (argc < 2) {
@@ -185,35 +180,36 @@ int main(int argc, char **argv)
 
 	ifindex = ifreq_buffer.ifr_ifindex;
 
-	/* length of the received frame */
-	int length = 0;
-	static struct arp_packet *inarp_req = (void *)buffer;
-
 	while (1) {
-		length = recvfrom(fd, buffer, ETH_ARP_FRAME_LEN, 0, NULL, NULL);
-		if (length <= 0) {
+		len = recvfrom(fd, &inarp_req, sizeof(inarp_req), 0,
+				NULL, NULL);
+		if (len <= 0) {
 			if (errno == EINTR)
 				continue;
 			err(EXIT_FAILURE, "Error recieving ARP packet");
 		}
 
-		/* is this an inarp request? */
-		if (ntohs(inarp_req->arp.ar_op) != ARPOP_InREQUEST)
+		/* Is this packet large enough for an inarp? */
+		if ((size_t)len < sizeof(inarp_req))
+			continue;
+
+		/* ... is it an inarp request? */
+		if (ntohs(inarp_req.arp.ar_op) != ARPOP_InREQUEST)
 			continue;
 
 		/* ... for us? */
-		if (memcmp(src_mac, inarp_req->eh.h_dest, ETH_ALEN))
+		if (memcmp(src_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
 		printf("src mac =%02x:%02x:%02x:%02x:%02x:%02x\n",
-				inarp_req->src_mac[0],
-				inarp_req->src_mac[1],
-				inarp_req->src_mac[2],
-				inarp_req->src_mac[3],
-				inarp_req->src_mac[4],
-				inarp_req->src_mac[5]);
+				inarp_req.src_mac[0],
+				inarp_req.src_mac[1],
+				inarp_req.src_mac[2],
+				inarp_req.src_mac[3],
+				inarp_req.src_mac[4],
+				inarp_req.src_mac[5]);
 
-		printf("src ip = %s\n", inet_ntoa(inarp_req->src_ip));
+		printf("src ip = %s\n", inet_ntoa(inarp_req.src_ip));
 
 		ret = get_local_ipaddr(fd, ifname, &local_ip);
 		/* if we don't have a local IP address to send, just drop the
@@ -222,12 +218,10 @@ int main(int argc, char **argv)
 			continue;
 
 		send_arp_packet(fd, ifindex,
-				    inarp_req->dest_mac,
+				    inarp_req.dest_mac,
 				    &local_ip,
-				    inarp_req->src_mac,
-				    &inarp_req->src_ip);
-
-		memset(buffer, 0, sizeof(buffer));
+				    inarp_req.src_mac,
+				    &inarp_req.src_ip);
 	}
 	close(fd);
 	return 0;
