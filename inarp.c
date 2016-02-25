@@ -130,6 +130,24 @@ static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
 	return 0;
 }
 
+static int get_local_hwaddr(int fd, const char *ifname, uint8_t *addr)
+{
+	struct ifreq ifreq;
+	int rc;
+
+	memset(&ifreq, 0, sizeof(ifreq));
+	strcpy(ifreq.ifr_name, ifname);
+
+	rc = ioctl(fd, SIOCGIFHWADDR, &ifreq);
+	if (rc) {
+		warn("Error querying local MAC address");
+		return -1;
+	}
+
+	memcpy(addr, ifreq.ifr_hwaddr.sa_data, ETH_ALEN);
+	return 0;
+}
+
 static void usage(const char *progname)
 {
 	fprintf(stderr, "Usage: %s <interface>\n", progname);
@@ -161,14 +179,10 @@ int main(int argc, char **argv)
 	if (fd < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
-	/* Query local mac address */
-	memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
-	strcpy(ifreq_buffer.ifr_name, ifname);
-	ret = ioctl(fd, SIOCGIFHWADDR, &ifreq_buffer);
-	if (ret < 0)
-		err(EXIT_FAILURE, "Error querying local MAC address");
+	ret = get_local_hwaddr(fd, ifname, src_mac);
+	if (ret)
+		exit(EXIT_FAILURE);
 
-	memcpy(src_mac, ifreq_buffer.ifr_hwaddr.sa_data, ETH_ALEN);
 	show_mac_addr(ifname, src_mac);
 
 	/* find the ifindex of the interface we're using */
