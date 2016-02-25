@@ -52,9 +52,7 @@ struct ETH_ARP_PACKET {
 
 struct ETH_ARP_PACKET *inarp_req;
 
-static char based_mac[6] = { 0, 0, 0, 0, 0, 0 };
-
-int send_arp_packet(int fd,
+static int send_arp_packet(int fd,
 		    int ifindex,
 		    struct ETH_ARP_PACKET *eth_arp,
 		    __be16 ar_op,
@@ -108,7 +106,7 @@ int send_arp_packet(int fd,
 	return send_result;
 }
 
-void show_mac_addr(const char *name, unsigned char *mac_addr)
+static void show_mac_addr(const char *name, unsigned char *mac_addr)
 {
 	int i;
 	printf("%s MAC address: ", name);
@@ -118,89 +116,6 @@ void show_mac_addr(const char *name, unsigned char *mac_addr)
 	}
 	return;
 }
-
-void show_ip_addr(char *desc, unsigned char *ip_addr)
-{
-	int i;
-	printf("%s IPv4 address: ", desc);
-	for (i = 0; i < 4; i++) {
-		printf("%d%c", (unsigned char)ip_addr[i],
-		       (i == 3) ? '\n' : '.');
-	}
-}
-
-void dump_data(char *desc, unsigned char *buffer, int length)
-{
-	int i;
-	printf("%s & length is [%d]:\n", desc, length);
-	for (i = 0; i < length; i++) {
-		printf("[%02X]", 0xff & buffer[i]);
-		if ((i & 0xf) == 0x7)
-			printf(" - ");
-		if ((i & 0xf) == 0xf)
-			printf("\n");
-	}
-	printf("\n");
-}
-
-void get_mac_address_for_node_id(int node_id, char *mac_addr)
-{
-	int i;
-	int add = node_id;
-	int carry = 0;
-	int mac;
-	for (i = 5; i >= 0; i--) {
-		mac = (int)based_mac[i];
-		mac += (add + carry);
-		add = 0;
-		if (mac > 255) {
-			carry = 1;
-			mac -= 256;
-		} else {
-			carry = 0;
-		}
-		mac_addr[i] = (char)mac;
-	}
-}
-
-/* return node_id or -1 for error */
-int get_node_id_by_mac_address(unsigned char *target_mac_addr)
-{
-	char mac_addr[ETH_ALEN];
-	int i;
-	for (i = 0; i < MAX_SERVER_NODE; i++) {
-		get_mac_address_for_node_id(i, mac_addr);
-		if (0 == memcmp(target_mac_addr, mac_addr, ETH_ALEN))
-			break;
-	}
-	if (i != MAX_SERVER_NODE) {
-		return i;
-	} else
-		return -1;
-}
-
-#if ENABLE_MONOTONIC_SYSCALL
-#include <sys/syscall.h>
-/* Old glibc (< 2.3.4) does not provide this constant. We use syscall
- * directly so this definition is safe. */
-#ifndef CLOCK_MONOTONIC
-#define CLOCK_MONOTONIC 1
-#endif
-
-unsigned FAST_FUNC monotonic_sec(void)
-{
-	struct timespec ts;
-	get_mono(&ts);
-	return ts.tv_sec;
-}
-
-#else
-
-unsigned monotonic_sec(void)
-{
-	return time(NULL);
-}
-#endif
 
 static void usage(const char *progname)
 {
