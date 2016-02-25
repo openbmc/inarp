@@ -121,7 +121,7 @@ static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
 
 	rc = do_ifreq(fd, SIOCGIFADDR, ifname, &ifreq);
 	if (rc) {
-		warn("Error querying local address for %s", ifname);
+		warn("Error querying local IP address for %s", ifname);
 		return -1;
 	}
 
@@ -143,7 +143,7 @@ static int get_local_hwaddr(int fd, const char *ifname, uint8_t *addr)
 
 	rc = do_ifreq(fd, SIOCGIFHWADDR, ifname, &ifreq);
 	if (rc) {
-		warn("Error querying local MAC address");
+		warn("Error querying local MAC address for %s", ifname);
 		return -1;
 	}
 
@@ -196,11 +196,11 @@ int main(int argc, char **argv)
 	if (fd < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
-	ret = get_local_hwaddr(fd, ifname, src_mac);
+	ret = get_ifindex(fd, ifname, &ifindex);
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	ret = get_ifindex(fd, ifname, &ifindex);
+	ret = get_local_hwaddr(fd, ifname, src_mac);
 	if (ret)
 		exit(EXIT_FAILURE);
 
@@ -227,7 +227,7 @@ int main(int argc, char **argv)
 		if (memcmp(src_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
-		printf("src mac =%02x:%02x:%02x:%02x:%02x:%02x\n",
+		printf("src mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				inarp_req.src_mac[0],
 				inarp_req.src_mac[1],
 				inarp_req.src_mac[2],
@@ -235,7 +235,7 @@ int main(int argc, char **argv)
 				inarp_req.src_mac[4],
 				inarp_req.src_mac[5]);
 
-		printf("src ip = %s\n", inet_ntoa(inarp_req.src_ip));
+		printf("src ip:  %s\n", inet_ntoa(inarp_req.src_ip));
 
 		ret = get_local_ipaddr(fd, ifname, &local_ip);
 		/* if we don't have a local IP address to send, just drop the
