@@ -145,7 +145,6 @@ int main(int argc, char **argv)
 {
 	/*buffer for ethernet frame */
 	static unsigned char buffer[ETH_FRAME_LEN];
-	int send_result = 0;
 	static struct ifreq ifreq_buffer;
 	const char *ifname;
 	int fd, ret;
@@ -164,7 +163,7 @@ int main(int argc, char **argv)
 	static struct in_addr local_ip;
 	int ifindex;
 
-	fd = socket(AF_PACKET, SOCK_PACKET, htons(ETH_P_ARP));
+	fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
 	if (fd < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
@@ -226,18 +225,13 @@ int main(int argc, char **argv)
 		if (ret)
 			continue;
 
-		int fd_1;
-		fd_1 = socket(AF_PACKET, SOCK_RAW, 0);
-		if (fd_1 < 0)
-			err(EXIT_FAILURE, "Error opening response socket");
-		send_result = send_arp_packet(fd_1, ifindex, &inarp_resp,
+		ret = send_arp_packet(fd, ifindex, &inarp_resp,
 				    ARPOP_InREPLY,
 				    inarp_req->dest_mac,
 				    &local_ip,
 				    inarp_req->src_mac,
 				    &inarp_req->src_ip);
-		close(fd_1);
-		if (send_result == -1) {
+		if (ret < 0) {
 			warn("Error sending response");
 			sleep(1);
 			continue;
