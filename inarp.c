@@ -67,8 +67,8 @@ static int send_arp_packet(int fd,
 	memcpy(socket_address.sll_addr, dest_mac, ETH_ALEN);
 
 	/* set the frame header */
-	memcpy(arp.eh.h_dest, (void *)dest_mac, ETH_ALEN);
-	memcpy(arp.eh.h_source, (void *)src_mac, ETH_ALEN);
+	memcpy(arp.eh.h_dest, dest_mac, ETH_ALEN);
+	memcpy(arp.eh.h_source, src_mac, ETH_ALEN);
 	arp.eh.h_proto = htons(ETH_P_ARP);
 
 	/* Fill InARP request data for ethernet + ipv4 */
