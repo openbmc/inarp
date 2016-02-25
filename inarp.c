@@ -30,13 +30,10 @@
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 
-#define MAX_SERVER_NODE 24
-#define SKU1_MAX_SERVER_NODES 24
-
-#define ETH_ARP_FRAME_LEN (	sizeof(struct ethhdr)+\
-							sizeof(struct arphdr)+\
-							((ETH_ALEN+4)*2)\
-							)
+#define ETH_ARP_FRAME_LEN ( \
+	sizeof(struct ethhdr) + \
+	sizeof(struct arphdr) + \
+	((ETH_ALEN + 4) * 2))
 
 struct ARP_DATA {
 	unsigned char src_mac[ETH_ALEN];
