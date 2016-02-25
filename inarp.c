@@ -48,17 +48,16 @@ struct arp_packet {
 
 static int send_arp_packet(int fd,
 		    int ifindex,
-		    struct arp_packet *eth_arp,
-		    __be16 ar_op,
 		    unsigned char *src_mac,
 		    struct in_addr *src_ip,
 		    unsigned char *dest_mac,
 		    struct in_addr *dest_ip)
 {
-	struct ethhdr *eh = &eth_arp->eh;
-	struct arphdr *arp = &eth_arp->arp;
 	struct sockaddr_ll socket_address;
+	struct arp_packet arp;
 	int rc;
+
+	memset(&arp, 0, sizeof(arp));
 
 	/* Prepare our link-layer address: raw packet interface,
 	 * using the ifindex interface, receiving ARP packets
@@ -72,25 +71,25 @@ static int send_arp_packet(int fd,
 	memcpy(socket_address.sll_addr, dest_mac, ETH_ALEN);
 
 	/* set the frame header */
-	memcpy((void *)eh->h_dest, (void *)dest_mac, ETH_ALEN);
-	memcpy((void *)eh->h_source, (void *)src_mac, ETH_ALEN);
-	eh->h_proto = htons(ETH_P_ARP);
+	memcpy(arp.eh.h_dest, (void *)dest_mac, ETH_ALEN);
+	memcpy(arp.eh.h_source, (void *)src_mac, ETH_ALEN);
+	arp.eh.h_proto = htons(ETH_P_ARP);
 
 	/* Fill InARP request data for ethernet + ipv4 */
-	arp->ar_hrd = htons(ARPHRD_ETHER);
-	arp->ar_pro = htons(ETH_P_ARP);
-	arp->ar_hln = ETH_ALEN;
-	arp->ar_pln = 4;
-	arp->ar_op = htons(ar_op);
+	arp.arp.ar_hrd = htons(ARPHRD_ETHER);
+	arp.arp.ar_pro = htons(ETH_P_ARP);
+	arp.arp.ar_hln = ETH_ALEN;
+	arp.arp.ar_pln = 4;
+	arp.arp.ar_op = htons(ARPOP_InREPLY);
 
 	/* fill arp ethernet mac & ipv4 info */
-	memcpy(&eth_arp->src_mac, src_mac, sizeof(eth_arp->src_mac));
-	memcpy(&eth_arp->src_ip, src_ip, sizeof(eth_arp->src_ip));
-	memcpy(&eth_arp->dest_mac, dest_mac, sizeof(eth_arp->dest_mac));
-	memcpy(&eth_arp->dest_ip, dest_ip, sizeof(eth_arp->dest_ip));
+	memcpy(&arp.src_mac, src_mac, sizeof(arp.src_mac));
+	memcpy(&arp.src_ip, src_ip, sizeof(arp.src_ip));
+	memcpy(&arp.dest_mac, dest_mac, sizeof(arp.dest_mac));
+	memcpy(&arp.dest_ip, dest_ip, sizeof(arp.dest_ip));
 
 	/* send the packet */
-	rc = sendto(fd, eth_arp, ETH_ARP_FRAME_LEN, 0,
+	rc = sendto(fd, &arp, sizeof(arp), 0,
 			     (struct sockaddr *)&socket_address,
 			     sizeof(socket_address));
 	if (rc < 0)
@@ -189,11 +188,8 @@ int main(int argc, char **argv)
 	/* length of the received frame */
 	int length = 0;
 	static struct arp_packet *inarp_req = (void *)buffer;
-	static struct arp_packet inarp_resp;
 
 	while (1) {
-		memset((void *)&inarp_resp, 0, sizeof inarp_resp);
-
 		length = recvfrom(fd, buffer, ETH_ARP_FRAME_LEN, 0, NULL, NULL);
 		if (length <= 0) {
 			if (errno == EINTR)
@@ -225,8 +221,7 @@ int main(int argc, char **argv)
 		if (ret)
 			continue;
 
-		send_arp_packet(fd, ifindex, &inarp_resp,
-				    ARPOP_InREPLY,
+		send_arp_packet(fd, ifindex,
 				    inarp_req->dest_mac,
 				    &local_ip,
 				    inarp_req->src_mac,
