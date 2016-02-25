@@ -187,45 +187,49 @@ int main(int argc, char **argv)
 		}
 
 		memset((void *)&inarp_resp, 0, sizeof inarp_resp);
-		length = recvfrom(fd, buffer, ETH_ARP_FRAME_LEN, 0, NULL, NULL);
-		if (length == -1) {
-			sleep(1);
-		}
-		if (0 == memcmp(src_mac, inarp_req->eh.h_dest, ETH_ALEN)) {
-			if (ntohs(inarp_req->arp.ar_op) == ARPOP_InREQUEST) {
 
-				printf
-				    ("src mac =%02x:%02x:%02x:%02x:%02x:%02x\n",
-				     inarp_req->src_mac[0],
-				     inarp_req->src_mac[1],
-				     inarp_req->src_mac[2],
-				     inarp_req->src_mac[3],
-				     inarp_req->src_mac[4],
-				     inarp_req->src_mac[5]
-				    );
-				printf("src ip = %s\n",
-						inet_ntoa(inarp_req->src_ip));
-				int fd_1;
-				fd_1 = socket(AF_PACKET, SOCK_RAW, 0);
-				if (fd_1 < 0)
-					err(EXIT_FAILURE,
-					"Error opening response socket");
-				send_result =
-				    send_arp_packet(fd_1, ifindex, &inarp_resp,
-						    ARPOP_InREPLY,
-						    inarp_req->dest_mac,
-						    &src_ip,
-						    inarp_req->src_mac,
-						    &inarp_req->src_ip);
-				close(fd_1);
-				if (send_result == -1) {
-					warn("Error sending response");
-					sleep(1);
-					continue;
-				}
-			}
-			memset(buffer, 0, sizeof(buffer));
+		length = recvfrom(fd, buffer, ETH_ARP_FRAME_LEN, 0, NULL, NULL);
+		if (length <= 0) {
+			if (errno == EINTR)
+				continue;
+			err(EXIT_FAILURE, "Error recieving ARP packet");
 		}
+
+		/* is this an inarp request? */
+		if (ntohs(inarp_req->arp.ar_op) != ARPOP_InREQUEST)
+			continue;
+
+		/* ... for us? */
+		if (memcmp(src_mac, inarp_req->eh.h_dest, ETH_ALEN))
+			continue;
+
+		printf("src mac =%02x:%02x:%02x:%02x:%02x:%02x\n",
+				inarp_req->src_mac[0],
+				inarp_req->src_mac[1],
+				inarp_req->src_mac[2],
+				inarp_req->src_mac[3],
+				inarp_req->src_mac[4],
+				inarp_req->src_mac[5]);
+
+		printf("src ip = %s\n", inet_ntoa(inarp_req->src_ip));
+
+		int fd_1;
+		fd_1 = socket(AF_PACKET, SOCK_RAW, 0);
+		if (fd_1 < 0)
+			err(EXIT_FAILURE, "Error opening response socket");
+		send_result = send_arp_packet(fd_1, ifindex, &inarp_resp,
+				    ARPOP_InREPLY,
+				    inarp_req->dest_mac,
+				    &src_ip,
+				    inarp_req->src_mac,
+				    &inarp_req->src_ip);
+		close(fd_1);
+		if (send_result == -1) {
+			warn("Error sending response");
+			sleep(1);
+			continue;
+		}
+		memset(buffer, 0, sizeof(buffer));
 	}
 	close(fd);
 	return 0;
