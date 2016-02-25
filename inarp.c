@@ -173,10 +173,12 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
+	static unsigned char local_mac[6];
+	static struct in_addr local_ip;
 	struct arp_packet inarp_req;
+	int fd, ret, ifindex;
 	const char *ifname;
 	ssize_t len;
-	int fd, ret;
 
 	if (argc < 2) {
 		usage(argv[0]);
@@ -188,9 +190,6 @@ int main(int argc, char **argv)
 	if (strlen(ifname) > IFNAMSIZ)
 		errx(EXIT_FAILURE, "Interface name '%s' is invalid", ifname);
 
-	static unsigned char src_mac[6];
-	static struct in_addr local_ip;
-	int ifindex;
 
 	fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
 	if (fd < 0)
@@ -200,11 +199,11 @@ int main(int argc, char **argv)
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	ret = get_local_hwaddr(fd, ifname, src_mac);
+	ret = get_local_hwaddr(fd, ifname, local_mac);
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	show_mac_addr(ifname, src_mac);
+	show_mac_addr(ifname, local_mac);
 
 	while (1) {
 		len = recvfrom(fd, &inarp_req, sizeof(inarp_req), 0,
@@ -224,7 +223,7 @@ int main(int argc, char **argv)
 			continue;
 
 		/* ... for us? */
-		if (memcmp(src_mac, inarp_req.eh.h_dest, ETH_ALEN))
+		if (memcmp(local_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
 		printf("src mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
