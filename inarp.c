@@ -226,7 +226,7 @@ int main(int argc, char **argv)
 		if (memcmp(local_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
-		printf("src mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
+		printf("src mac:  %02x:%02x:%02x:%02x:%02x:%02x\n",
 				inarp_req.src_mac[0],
 				inarp_req.src_mac[1],
 				inarp_req.src_mac[2],
@@ -234,13 +234,15 @@ int main(int argc, char **argv)
 				inarp_req.src_mac[4],
 				inarp_req.src_mac[5]);
 
-		printf("src ip:  %s\n", inet_ntoa(inarp_req.src_ip));
+		printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
 
 		ret = get_local_ipaddr(fd, ifname, &local_ip);
 		/* if we don't have a local IP address to send, just drop the
 		 * request */
 		if (ret)
 			continue;
+
+		printf("local ip: %s\n", inet_ntoa(local_ip));
 
 		send_arp_packet(fd, ifindex,
 				    inarp_req.dest_mac,
