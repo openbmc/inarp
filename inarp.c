@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include <err.h>
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -54,10 +55,10 @@ static int send_arp_packet(int fd,
 		    unsigned char *dest_mac,
 		    struct in_addr *dest_ip)
 {
-	int send_result = 0;
 	struct ethhdr *eh = &eth_arp->eh;
 	struct arphdr *arp = &eth_arp->arp;
 	struct sockaddr_ll socket_address;
+	int rc;
 
 	/* Prepare our link-layer address: raw packet interface,
 	 * using the ifindex interface, receiving ARP packets
@@ -89,13 +90,13 @@ static int send_arp_packet(int fd,
 	memcpy(&eth_arp->dest_ip, dest_ip, sizeof(eth_arp->dest_ip));
 
 	/* send the packet */
-	send_result = sendto(fd, eth_arp, ETH_ARP_FRAME_LEN, 0,
+	rc = sendto(fd, eth_arp, ETH_ARP_FRAME_LEN, 0,
 			     (struct sockaddr *)&socket_address,
 			     sizeof(socket_address));
-	if (send_result == -1) {
-		printf("sendto: [%s]\n", strerror(errno));
-	}
-	return send_result;
+	if (rc < 0)
+		warn("failure sending ARP response");
+
+	return rc;
 }
 
 static void show_mac_addr(const char *name, unsigned char *mac_addr)
@@ -130,29 +131,24 @@ int main(int argc, char **argv)
 
 	ifname = argv[1];
 
-	if (strlen(ifname) > IFNAMSIZ) {
-		fprintf(stderr, "Interface name '%s' is invalid\n", ifname);
-		return EXIT_FAILURE;
-	}
+	if (strlen(ifname) > IFNAMSIZ)
+		errx(EXIT_FAILURE, "Interface name '%s' is invalid", ifname);
 
 	static unsigned char src_mac[6];
 	static struct in_addr src_ip;
 	int ifindex;
 
-	if (((fd = socket(AF_PACKET, SOCK_PACKET, htons(ETH_P_ARP)))) == -1) {
-		printf("socket: [%s]\n", strerror(errno));
-		exit(-1);
-	}
+	fd = socket(AF_PACKET, SOCK_PACKET, htons(ETH_P_ARP));
+	if (fd < 0)
+		err(EXIT_FAILURE, "Error opening ARP socket");
 
 	/* Query local mac address */
 	memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
 	strcpy(ifreq_buffer.ifr_name, ifname);
 	ret = ioctl(fd, SIOCGIFHWADDR, &ifreq_buffer);
-	if (ret == -1) {
-		printf("ioctl2: [%s]\n", strerror(errno));
-		close(fd);
-		exit(-1);
-	}
+	if (ret < 0)
+		err(EXIT_FAILURE, "Error querying local MAC address");
+
 	memcpy(src_mac, ifreq_buffer.ifr_hwaddr.sa_data, ETH_ALEN);
 	show_mac_addr(ifname, src_mac);
 
@@ -160,11 +156,9 @@ int main(int argc, char **argv)
 	memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
 	strcpy(ifreq_buffer.ifr_name, ifname);
 	ret = ioctl(fd, SIOCGIFINDEX, &ifreq_buffer);
-	if (ret == -1) {
-		printf("ioctl4: [%s]\n", strerror(errno));
-		close(fd);
-		exit(-1);
-	}
+	if (ret < 0)
+		err(EXIT_FAILURE, "Error querying interface %s", ifname);
+
 	ifindex = ifreq_buffer.ifr_ifindex;
 
 	/* length of the received frame */
@@ -186,7 +180,7 @@ int main(int argc, char **argv)
 			memcpy(&src_ip, &ifreq_buffer.ifr_addr.sa_data[2],
 					sizeof(src_ip));
 		} else {
-			printf("unknown address family [%d]!\n",
+			warnx("Unknown address family %d in request!",
 			       ifreq_buffer.ifr_addr.sa_family);
 			sleep(1);
 			continue;
@@ -212,12 +206,10 @@ int main(int argc, char **argv)
 				printf("src ip = %s\r\n",
 						inet_ntoa(inarp_req->src_ip));
 				int fd_1;
-				if (((fd_1 =
-				      socket(AF_PACKET, SOCK_RAW, 0))) == -1) {
-					printf("socket: [%s]\n",
-					       strerror(errno));
-					exit(-1);
-				}
+				fd_1 = socket(AF_PACKET, SOCK_RAW, 0);
+				if (fd_1 < 0)
+					err(EXIT_FAILURE,
+					"Error opening response socket");
 				send_result =
 				    send_arp_packet(fd_1, ifindex, &inarp_resp,
 						    ARPOP_InREPLY,
@@ -227,8 +219,7 @@ int main(int argc, char **argv)
 						    &inarp_req->src_ip);
 				close(fd_1);
 				if (send_result == -1) {
-					printf("[Rsp] sendto: [%s]\n",
-					       strerror(errno));
+					warn("Error sending response");
 					sleep(1);
 					continue;
 				}
