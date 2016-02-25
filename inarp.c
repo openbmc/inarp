@@ -225,17 +225,13 @@ int main(int argc, char **argv)
 		if (ret)
 			continue;
 
-		ret = send_arp_packet(fd, ifindex, &inarp_resp,
+		send_arp_packet(fd, ifindex, &inarp_resp,
 				    ARPOP_InREPLY,
 				    inarp_req->dest_mac,
 				    &local_ip,
 				    inarp_req->src_mac,
 				    &inarp_req->src_ip);
-		if (ret < 0) {
-			warn("Error sending response");
-			sleep(1);
-			continue;
-		}
+
 		memset(buffer, 0, sizeof(buffer));
 	}
 	close(fd);
