@@ -110,7 +110,7 @@ int send_arp_packet(int fd,
 	return send_result;
 }
 
-void show_mac_addr(char *name, unsigned char *mac_addr)
+void show_mac_addr(const char *name, unsigned char *mac_addr)
 {
 	int i;
 	printf("%s MAC address: ", name);
@@ -208,17 +208,32 @@ unsigned monotonic_sec(void)
 	return time(NULL);
 }
 #endif
-//query ip addr for server node w/ mac addr
-//inarp "ethX" "peer mac addr(xx:xx:xx:xx:xx:xx)"
-//inarp daemon to handle inarp packets
-//inarp "ethX" "file for storing node list"
-int main(void)
+
+static void usage(const char *progname)
+{
+	fprintf(stderr, "Usage: %s <interface>\n", progname);
+}
+
+int main(int argc, char **argv)
 {
 	int fd, ret;
 	/*buffer for ethernet frame */
 	static unsigned char buffer[ETH_FRAME_LEN];	/* single packets are usually not bigger than 8192 bytes */
 	int send_result = 0;
 	static struct ifreq ifreq_buffer;
+	const char *ifname;
+
+	if (argc < 2) {
+		usage(argv[0]);
+		return EXIT_FAILURE;
+	}
+
+	ifname = argv[1];
+
+	if (strlen(ifname) > IFNAMSIZ) {
+		fprintf(stderr, "Interface name '%s' is invalid\n", ifname);
+		return EXIT_FAILURE;
+	}
 
 	/*our MAC address */
 	static unsigned char src_mac[6];
@@ -233,7 +248,7 @@ int main(void)
 	}
 	//local mac address
 	memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
-	strcpy(ifreq_buffer.ifr_name, "ncsi0");
+	strcpy(ifreq_buffer.ifr_name, ifname);
 	ret = ioctl(fd, SIOCGIFHWADDR, &ifreq_buffer);
 	if (ret == -1) {
 		printf("ioctl2: [%s]\n", strerror(errno));
@@ -241,10 +256,10 @@ int main(void)
 		exit(-1);
 	}
 	memcpy(src_mac, ifreq_buffer.ifr_hwaddr.sa_data, ETH_ALEN);
-	show_mac_addr("ncsi0", src_mac);
+	show_mac_addr(ifname, src_mac);
 	//interface index
 	memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
-	strcpy(ifreq_buffer.ifr_name, "ncsi0");
+	strcpy(ifreq_buffer.ifr_name, ifname);
 	ret = ioctl(fd, SIOCGIFINDEX, &ifreq_buffer);
 	if (ret == -1) {
 		printf("ioctl4: [%s]\n", strerror(errno));
@@ -265,7 +280,7 @@ int main(void)
 	while (1) {
 		//get local ip address
 		memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
-		strcpy(ifreq_buffer.ifr_name, "ncsi0");
+		strcpy(ifreq_buffer.ifr_name, ifname);
 		ret = ioctl(fd, SIOCGIFADDR, &ifreq_buffer);
 		if (ret == -1) {
 //                      printf("ioctl3: [%s]\n", strerror(errno));
