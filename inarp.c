@@ -110,6 +110,32 @@ static void show_mac_addr(const char *name, unsigned char *mac_addr)
 	return;
 }
 
+static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
+{
+	struct sockaddr_in *sa;
+	struct ifreq ifreq;
+	int rc;
+
+	memset(&ifreq, 0, sizeof(ifreq));
+	strcpy(ifreq.ifr_name, ifname);
+
+	rc = ioctl(fd, SIOCGIFADDR, &ifreq);
+	if (rc) {
+		warn("Error querying local address for %s", ifname);
+		return -1;
+	}
+
+	if (ifreq.ifr_addr.sa_family != AF_INET) {
+		warnx("Unknown address family %d in address response",
+		       ifreq.ifr_addr.sa_family);
+		return -1;
+	}
+
+	sa = (struct sockaddr_in *)&ifreq.ifr_addr;
+	memcpy(addr, &sa->sin_addr, sizeof(*addr));
+	return 0;
+}
+
 static void usage(const char *progname)
 {
 	fprintf(stderr, "Usage: %s <interface>\n", progname);
@@ -135,7 +161,7 @@ int main(int argc, char **argv)
 		errx(EXIT_FAILURE, "Interface name '%s' is invalid", ifname);
 
 	static unsigned char src_mac[6];
-	static struct in_addr src_ip;
+	static struct in_addr local_ip;
 	int ifindex;
 
 	fd = socket(AF_PACKET, SOCK_PACKET, htons(ETH_P_ARP));
@@ -167,25 +193,6 @@ int main(int argc, char **argv)
 	static struct arp_packet inarp_resp;
 
 	while (1) {
-		/* get local ip address */
-		memset(&ifreq_buffer, 0x00, sizeof(ifreq_buffer));
-		strcpy(ifreq_buffer.ifr_name, ifname);
-		ret = ioctl(fd, SIOCGIFADDR, &ifreq_buffer);
-		if (ret == -1) {
-			sleep(1);
-			continue;
-		}
-
-		if (AF_INET == ifreq_buffer.ifr_addr.sa_family) {
-			memcpy(&src_ip, &ifreq_buffer.ifr_addr.sa_data[2],
-					sizeof(src_ip));
-		} else {
-			warnx("Unknown address family %d in request!",
-			       ifreq_buffer.ifr_addr.sa_family);
-			sleep(1);
-			continue;
-		}
-
 		memset((void *)&inarp_resp, 0, sizeof inarp_resp);
 
 		length = recvfrom(fd, buffer, ETH_ARP_FRAME_LEN, 0, NULL, NULL);
@@ -213,6 +220,12 @@ int main(int argc, char **argv)
 
 		printf("src ip = %s\n", inet_ntoa(inarp_req->src_ip));
 
+		ret = get_local_ipaddr(fd, ifname, &local_ip);
+		/* if we don't have a local IP address to send, just drop the
+		 * request */
+		if (ret)
+			continue;
+
 		int fd_1;
 		fd_1 = socket(AF_PACKET, SOCK_RAW, 0);
 		if (fd_1 < 0)
@@ -220,7 +233,7 @@ int main(int argc, char **argv)
 		send_result = send_arp_packet(fd_1, ifindex, &inarp_resp,
 				    ARPOP_InREPLY,
 				    inarp_req->dest_mac,
-				    &src_ip,
+				    &local_ip,
 				    inarp_req->src_mac,
 				    &inarp_req->src_ip);
 		close(fd_1);
