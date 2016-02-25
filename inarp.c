@@ -25,6 +25,7 @@
 #include <sys/socket.h>
 
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
@@ -33,34 +34,29 @@
 #define ETH_ARP_FRAME_LEN ( \
 	sizeof(struct ethhdr) + \
 	sizeof(struct arphdr) + \
-	((ETH_ALEN + 4) * 2))
+	((ETH_ALEN + sizeof(struct in_addr)) * 2))
 
-struct ARP_DATA {
-	unsigned char src_mac[ETH_ALEN];
-	unsigned char src_ip[4];
-	unsigned char dest_mac[ETH_ALEN];
-	unsigned char dest_ip[4];
-};
-struct ETH_ARP_PACKET {
+struct arp_packet {
 	struct ethhdr eh;
 	struct arphdr arp;
-	struct ARP_DATA arp_data;
-};
-
-struct ETH_ARP_PACKET *inarp_req;
+	uint8_t		src_mac[ETH_ALEN];
+	struct in_addr	src_ip;
+	uint8_t		dest_mac[ETH_ALEN];
+	struct in_addr	dest_ip;
+} __attribute__((packed));
 
 static int send_arp_packet(int fd,
 		    int ifindex,
-		    struct ETH_ARP_PACKET *eth_arp,
+		    struct arp_packet *eth_arp,
 		    __be16 ar_op,
 		    unsigned char *src_mac,
-		    unsigned char *src_ip,
-		    unsigned char *dest_mac, unsigned char *dest_ip)
+		    struct in_addr *src_ip,
+		    unsigned char *dest_mac,
+		    struct in_addr *dest_ip)
 {
 	int send_result = 0;
 	struct ethhdr *eh = &eth_arp->eh;
 	struct arphdr *arp = &eth_arp->arp;
-	struct ARP_DATA *arp_data = &eth_arp->arp_data;
 	struct sockaddr_ll socket_address;
 
 	/* Prepare our link-layer address: raw packet interface,
@@ -87,11 +83,10 @@ static int send_arp_packet(int fd,
 	arp->ar_op = htons(ar_op);
 
 	/* fill arp ethernet mac & ipv4 info */
-	arp_data = (void *)(arp + 1);
-	memcpy(arp_data->src_mac, (void *)src_mac, ETH_ALEN);
-	memcpy(arp_data->src_ip, src_ip, 4);
-	memcpy(arp_data->dest_mac, (void *)dest_mac, ETH_ALEN);
-	memcpy(arp_data->dest_ip, dest_ip, 4);
+	memcpy(&eth_arp->src_mac, src_mac, sizeof(eth_arp->src_mac));
+	memcpy(&eth_arp->src_ip, src_ip, sizeof(eth_arp->src_ip));
+	memcpy(&eth_arp->dest_mac, dest_mac, sizeof(eth_arp->dest_mac));
+	memcpy(&eth_arp->dest_ip, dest_ip, sizeof(eth_arp->dest_ip));
 
 	/* send the packet */
 	send_result = sendto(fd, eth_arp, ETH_ARP_FRAME_LEN, 0,
@@ -121,12 +116,12 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
-	int fd, ret;
 	/*buffer for ethernet frame */
 	static unsigned char buffer[ETH_FRAME_LEN];
 	int send_result = 0;
 	static struct ifreq ifreq_buffer;
 	const char *ifname;
+	int fd, ret;
 
 	if (argc < 2) {
 		usage(argv[0]);
@@ -141,7 +136,7 @@ int main(int argc, char **argv)
 	}
 
 	static unsigned char src_mac[6];
-	static unsigned char src_ip[4];
+	static struct in_addr src_ip;
 	int ifindex;
 
 	if (((fd = socket(AF_PACKET, SOCK_PACKET, htons(ETH_P_ARP)))) == -1) {
@@ -174,9 +169,8 @@ int main(int argc, char **argv)
 
 	/* length of the received frame */
 	int length = 0;
-	static struct ETH_ARP_PACKET *inarp_req =
-		(struct ETH_ARP_PACKET *)buffer;
-	static struct ETH_ARP_PACKET inarp_resp;
+	static struct arp_packet *inarp_req = (void *)buffer;
+	static struct arp_packet inarp_resp;
 
 	while (1) {
 		/* get local ip address */
@@ -189,7 +183,8 @@ int main(int argc, char **argv)
 		}
 
 		if (AF_INET == ifreq_buffer.ifr_addr.sa_family) {
-			memcpy(src_ip, &ifreq_buffer.ifr_addr.sa_data[2], 4);
+			memcpy(&src_ip, &ifreq_buffer.ifr_addr.sa_data[2],
+					sizeof(src_ip));
 		} else {
 			printf("unknown address family [%d]!\n",
 			       ifreq_buffer.ifr_addr.sa_family);
@@ -207,19 +202,15 @@ int main(int argc, char **argv)
 
 				printf
 				    ("src mac =%02x:%02x:%02x:%02x:%02x:%02x\r\n",
-				     inarp_req->arp_data.src_mac[0],
-				     inarp_req->arp_data.src_mac[1],
-				     inarp_req->arp_data.src_mac[2],
-				     inarp_req->arp_data.src_mac[3],
-				     inarp_req->arp_data.src_mac[4],
-				     inarp_req->arp_data.src_mac[5]
+				     inarp_req->src_mac[0],
+				     inarp_req->src_mac[1],
+				     inarp_req->src_mac[2],
+				     inarp_req->src_mac[3],
+				     inarp_req->src_mac[4],
+				     inarp_req->src_mac[5]
 				    );
-				printf("src ip =%d:%d:%d:%d\r\n",
-				       inarp_req->arp_data.src_ip[0],
-				       inarp_req->arp_data.src_ip[1],
-				       inarp_req->arp_data.src_ip[2],
-				       inarp_req->arp_data.src_ip[3]
-				    );
+				printf("src ip = %s\r\n",
+						inet_ntoa(inarp_req->src_ip));
 				int fd_1;
 				if (((fd_1 =
 				      socket(AF_PACKET, SOCK_RAW, 0))) == -1) {
@@ -230,10 +221,10 @@ int main(int argc, char **argv)
 				send_result =
 				    send_arp_packet(fd_1, ifindex, &inarp_resp,
 						    ARPOP_InREPLY,
-						    inarp_req->arp_data.
-						    dest_mac, src_ip,
-						    inarp_req->arp_data.src_mac,
-						    inarp_req->arp_data.src_ip);
+						    inarp_req->dest_mac,
+						    &src_ip,
+						    inarp_req->src_mac,
+						    &inarp_req->src_ip);
 				close(fd_1);
 				if (send_result == -1) {
 					printf("[Rsp] sendto: [%s]\n",
