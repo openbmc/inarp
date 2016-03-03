@@ -33,20 +33,24 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 
+struct eth_addr {
+	uint8_t		eth_addr[ETH_ALEN];
+} __attribute__((packed));
+
 struct arp_packet {
 	struct ethhdr	eh;
 	struct arphdr	arp;
-	uint8_t		src_mac[ETH_ALEN];
+	struct eth_addr	src_mac;
 	struct in_addr	src_ip;
-	uint8_t		dest_mac[ETH_ALEN];
+	struct eth_addr	dest_mac;
 	struct in_addr	dest_ip;
 } __attribute__((packed));
 
 static int send_arp_packet(int fd,
 		int ifindex,
-		const unsigned char *src_mac,
+		const struct eth_addr *src_mac,
 		const struct in_addr *src_ip,
-		const unsigned char *dest_mac,
+		const struct eth_addr *dest_mac,
 		const struct in_addr *dest_ip)
 {
 	struct sockaddr_ll addr;
@@ -93,14 +97,15 @@ static int send_arp_packet(int fd,
 	return rc;
 }
 
-static const char *eth_mac_to_str(const unsigned char *mac_addr)
+static const char *eth_mac_to_str(const struct eth_addr *mac_addr)
 {
 	static char mac_str[ETH_ALEN * (sizeof("00:") - 1)];
+	const uint8_t *addr = mac_addr->eth_addr;
 
 	snprintf(mac_str, sizeof(mac_str),
 			"%02x:%02x:%02x:%02x:%02x:%02x",
-			mac_addr[0], mac_addr[1], mac_addr[2],
-			mac_addr[3], mac_addr[4], mac_addr[5]);
+			addr[0], addr[1], addr[2],
+			addr[3], addr[4], addr[5]);
 
 	return mac_str;
 }
@@ -137,7 +142,7 @@ static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
 	return 0;
 }
 
-static int get_local_hwaddr(int fd, const char *ifname, uint8_t *addr)
+static int get_local_hwaddr(int fd, const char *ifname, struct eth_addr *addr)
 {
 	struct ifreq ifreq;
 	int rc;
@@ -174,7 +179,7 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
-	static unsigned char local_mac[6];
+	static struct eth_addr local_mac;
 	static struct in_addr local_ip;
 	struct arp_packet inarp_req;
 	int fd, ret, ifindex;
@@ -200,11 +205,11 @@ int main(int argc, char **argv)
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	ret = get_local_hwaddr(fd, ifname, local_mac);
+	ret = get_local_hwaddr(fd, ifname, &local_mac);
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	printf("%s MAC address: %s\n", ifname, eth_mac_to_str(local_mac));
+	printf("%s MAC address: %s\n", ifname, eth_mac_to_str(&local_mac));
 
 	while (1) {
 		len = recvfrom(fd, &inarp_req, sizeof(inarp_req), 0,
@@ -224,10 +229,10 @@ int main(int argc, char **argv)
 			continue;
 
 		/* ... for us? */
-		if (memcmp(local_mac, inarp_req.eh.h_dest, ETH_ALEN))
+		if (memcmp(&local_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
-		printf("src mac:  %s\n", eth_mac_to_str(inarp_req.src_mac));
+		printf("src mac:  %s\n", eth_mac_to_str(&inarp_req.src_mac));
 		printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
 
 		ret = get_local_ipaddr(fd, ifname, &local_ip);
@@ -239,9 +244,9 @@ int main(int argc, char **argv)
 		printf("local ip: %s\n", inet_ntoa(local_ip));
 
 		send_arp_packet(fd, ifindex,
-				inarp_req.dest_mac,
+				&inarp_req.dest_mac,
 				&local_ip,
-				inarp_req.src_mac,
+				&inarp_req.src_mac,
 				&inarp_req.src_ip);
 	}
 	close(fd);
