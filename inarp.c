@@ -93,15 +93,16 @@ static int send_arp_packet(int fd,
 	return rc;
 }
 
-static void show_mac_addr(const char *name, const unsigned char *mac_addr)
+static const char *eth_mac_to_str(const unsigned char *mac_addr)
 {
-	int i;
-	printf("%s MAC address: ", name);
-	for (i = 0; i < 6; i++) {
-		printf("%.2X%c", (unsigned char)mac_addr[i],
-				(i == 5) ? '\n' : ':');
-	}
-	return;
+	static char mac_str[ETH_ALEN * (sizeof("00:") - 1)];
+
+	snprintf(mac_str, sizeof(mac_str),
+			"%02x:%02x:%02x:%02x:%02x:%02x",
+			mac_addr[0], mac_addr[1], mac_addr[2],
+			mac_addr[3], mac_addr[4], mac_addr[5]);
+
+	return mac_str;
 }
 
 static int do_ifreq(int fd, unsigned long type,
@@ -203,7 +204,7 @@ int main(int argc, char **argv)
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	show_mac_addr(ifname, local_mac);
+	printf("%s MAC address: %s\n", ifname, eth_mac_to_str(local_mac));
 
 	while (1) {
 		len = recvfrom(fd, &inarp_req, sizeof(inarp_req), 0,
@@ -226,14 +227,7 @@ int main(int argc, char **argv)
 		if (memcmp(local_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
-		printf("src mac:  %02x:%02x:%02x:%02x:%02x:%02x\n",
-				inarp_req.src_mac[0],
-				inarp_req.src_mac[1],
-				inarp_req.src_mac[2],
-				inarp_req.src_mac[3],
-				inarp_req.src_mac[4],
-				inarp_req.src_mac[5]);
-
+		printf("src mac:  %s\n", eth_mac_to_str(inarp_req.src_mac));
 		printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
 
 		ret = get_local_ipaddr(fd, ifname, &local_ip);
