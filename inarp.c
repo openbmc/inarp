@@ -114,7 +114,7 @@ static int do_ifreq(int fd, unsigned long type,
 		const char *ifname, struct ifreq *ifreq)
 {
 	memset(ifreq, 0, sizeof(*ifreq));
-	strcpy(ifreq->ifr_name, ifname);
+	strncpy(ifreq->ifr_name, ifname, sizeof(ifreq->ifr_name));
 
 	return ioctl(fd, type, ifreq);
 }
