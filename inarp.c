@@ -15,23 +15,23 @@
  * limitations under the License.
  ******************************************************************************/
 
+#include <err.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 #include <time.h>
 #include <unistd.h>
-#include <err.h>
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 
-#include <linux/if_packet.h>
-#include <linux/if_ether.h>
 #include <linux/if_arp.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
 
 struct arp_packet {
 	struct ethhdr	eh;
