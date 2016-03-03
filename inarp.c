@@ -1,19 +1,19 @@
 /******************************************************************************
-*	Copyright 2016 Foxconn
-*	Copyright 2016 IBM Corporation
-*
-*	Licensed under the Apache License, Version 2.0 (the "License");
-*	you may not use this file except in compliance with the License.
-*	You may obtain a copy of the License at
-*
-*		http://www.apache.org/licenses/LICENSE-2.0
-*
-*	Unless required by applicable law or agreed to in writing, software
-*	distributed under the License is distributed on an "AS IS" BASIS,
-*	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-*	See the License for the specific language governing permissions and
-*	limitations under the License.
-******************************************************************************/
+ * Copyright 2016 Foxconn
+ * Copyright 2016 IBM Corporation
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *	http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ ******************************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +34,8 @@
 #include <linux/if_arp.h>
 
 struct arp_packet {
-	struct ethhdr eh;
-	struct arphdr arp;
+	struct ethhdr	eh;
+	struct arphdr	arp;
 	uint8_t		src_mac[ETH_ALEN];
 	struct in_addr	src_ip;
 	uint8_t		dest_mac[ETH_ALEN];
@@ -43,11 +43,11 @@ struct arp_packet {
 } __attribute__((packed));
 
 static int send_arp_packet(int fd,
-		    int ifindex,
-		    unsigned char *src_mac,
-		    struct in_addr *src_ip,
-		    unsigned char *dest_mac,
-		    struct in_addr *dest_ip)
+		int ifindex,
+		unsigned char *src_mac,
+		struct in_addr *src_ip,
+		unsigned char *dest_mac,
+		struct in_addr *dest_ip)
 {
 	struct sockaddr_ll addr;
 	struct arp_packet arp;
@@ -99,7 +99,7 @@ static void show_mac_addr(const char *name, unsigned char *mac_addr)
 	printf("%s MAC address: ", name);
 	for (i = 0; i < 6; i++) {
 		printf("%.2X%c", (unsigned char)mac_addr[i],
-		       (i == 5) ? '\n' : ':');
+				(i == 5) ? '\n' : ':');
 	}
 	return;
 }
@@ -127,7 +127,7 @@ static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
 
 	if (ifreq.ifr_addr.sa_family != AF_INET) {
 		warnx("Unknown address family %d in address response",
-		       ifreq.ifr_addr.sa_family);
+				ifreq.ifr_addr.sa_family);
 		return -1;
 	}
 
@@ -245,10 +245,10 @@ int main(int argc, char **argv)
 		printf("local ip: %s\n", inet_ntoa(local_ip));
 
 		send_arp_packet(fd, ifindex,
-				    inarp_req.dest_mac,
-				    &local_ip,
-				    inarp_req.src_mac,
-				    &inarp_req.src_ip);
+				inarp_req.dest_mac,
+				&local_ip,
+				inarp_req.src_mac,
+				&inarp_req.src_ip);
 	}
 	close(fd);
 	return 0;
