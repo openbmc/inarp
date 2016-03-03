@@ -44,10 +44,10 @@ struct arp_packet {
 
 static int send_arp_packet(int fd,
 		int ifindex,
-		unsigned char *src_mac,
-		struct in_addr *src_ip,
-		unsigned char *dest_mac,
-		struct in_addr *dest_ip)
+		const unsigned char *src_mac,
+		const struct in_addr *src_ip,
+		const unsigned char *dest_mac,
+		const struct in_addr *dest_ip)
 {
 	struct sockaddr_ll addr;
 	struct arp_packet arp;
@@ -93,7 +93,7 @@ static int send_arp_packet(int fd,
 	return rc;
 }
 
-static void show_mac_addr(const char *name, unsigned char *mac_addr)
+static void show_mac_addr(const char *name, const unsigned char *mac_addr)
 {
 	int i;
 	printf("%s MAC address: ", name);
