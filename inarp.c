@@ -46,6 +46,13 @@ struct arp_packet {
 	struct in_addr	dest_ip;
 } __attribute__((packed));
 
+struct inarp_ctx {
+	int		socket;
+	const char	*ifname;
+	int		ifindex;
+	struct eth_addr	local_mac;
+};
+
 static int send_arp_packet(int fd,
 		int ifindex,
 		const struct eth_addr *src_mac,
@@ -179,40 +186,41 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
-	static struct eth_addr local_mac;
-	static struct in_addr local_ip;
 	struct arp_packet inarp_req;
-	int fd, ret, ifindex;
-	const char *ifname;
+	struct in_addr local_ip;
+	struct inarp_ctx inarp;
 	ssize_t len;
+	int ret;
 
 	if (argc < 2) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
 
-	ifname = argv[1];
+	memset(&inarp, 0, sizeof(inarp));
+	inarp.ifname = argv[1];
 
-	if (strlen(ifname) > IFNAMSIZ)
-		errx(EXIT_FAILURE, "Interface name '%s' is invalid", ifname);
+	if (strlen(inarp.ifname) > IFNAMSIZ)
+		errx(EXIT_FAILURE, "Interface name '%s' is invalid",
+				inarp.ifname);
 
-
-	fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-	if (fd < 0)
+	inarp.socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
+	if (inarp.socket < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
-	ret = get_ifindex(fd, ifname, &ifindex);
+	ret = get_ifindex(inarp.socket, inarp.ifname, &inarp.ifindex);
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	ret = get_local_hwaddr(fd, ifname, &local_mac);
+	ret = get_local_hwaddr(inarp.socket, inarp.ifname, &inarp.local_mac);
 	if (ret)
 		exit(EXIT_FAILURE);
 
-	printf("%s MAC address: %s\n", ifname, eth_mac_to_str(&local_mac));
+	printf("%s MAC address: %s\n", inarp.ifname,
+			eth_mac_to_str(&inarp.local_mac));
 
 	while (1) {
-		len = recvfrom(fd, &inarp_req, sizeof(inarp_req), 0,
+		len = recvfrom(inarp.socket, &inarp_req, sizeof(inarp_req), 0,
 				NULL, NULL);
 		if (len <= 0) {
 			if (errno == EINTR)
@@ -229,13 +237,13 @@ int main(int argc, char **argv)
 			continue;
 
 		/* ... for us? */
-		if (memcmp(&local_mac, inarp_req.eh.h_dest, ETH_ALEN))
+		if (memcmp(&inarp.local_mac, inarp_req.eh.h_dest, ETH_ALEN))
 			continue;
 
 		printf("src mac:  %s\n", eth_mac_to_str(&inarp_req.src_mac));
 		printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
 
-		ret = get_local_ipaddr(fd, ifname, &local_ip);
+		ret = get_local_ipaddr(inarp.socket, inarp.ifname, &local_ip);
 		/* if we don't have a local IP address to send, just drop the
 		 * request */
 		if (ret)
@@ -243,12 +251,12 @@ int main(int argc, char **argv)
 
 		printf("local ip: %s\n", inet_ntoa(local_ip));
 
-		send_arp_packet(fd, ifindex,
+		send_arp_packet(inarp.socket, inarp.ifindex,
 				&inarp_req.dest_mac,
 				&local_ip,
 				&inarp_req.src_mac,
 				&inarp_req.src_ip);
 	}
-	close(fd);
+	close(inarp.socket);
 	return 0;
 }
