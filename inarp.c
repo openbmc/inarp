@@ -184,61 +184,153 @@ static int get_ifindex(int fd, const char *ifname, int *ifindex)
 	return 0;
 }
 
-static void usage(const char *progname)
+static int init_interfaces(struct inarp_ctx *inarp)
 {
-	fprintf(stderr, "Usage: %s <interface>\n", progname);
+	int alloc_len, rc, retry = 3;
+	struct ifconf ifconf;
+	unsigned int i;
+
+	/* find the names of all interfaces */
+	for (;;) {
+		ifconf.ifc_len = 0;
+		ifconf.ifc_buf = NULL;
+		rc = ioctl(inarp->socket, SIOCGIFCONF, &ifconf);
+		if (rc < 0) {
+			warn("Error querying interface configuration size");
+			return -1;
+		}
+
+		/* the only way we can detect truncated ifconf data is by
+		 * allocating for one extra ifreq, then seeing if it gets
+		 * filled; if so, subsequent ones may have been dropped.
+		 */
+		alloc_len = ifconf.ifc_len + sizeof(struct ifreq);
+
+		ifconf.ifc_len = alloc_len;
+		ifconf.ifc_buf = malloc(alloc_len);
+
+		rc = ioctl(inarp->socket, SIOCGIFCONF, &ifconf);
+		if (rc < 0) {
+			warn("Error quering interface configuration");
+			free(ifconf.ifc_buf);
+			return -1;
+		}
+
+		if (ifconf.ifc_len < alloc_len)
+			break;
+
+		if (retry--) {
+			/* we may have lost ifconf data, as our buffer was
+			 * full; retry */
+			free(ifconf.ifc_buf);
+			continue;
+		}
+
+		warnx("Can't allocate data for interface configuration");
+		return -1;
+	}
+
+	/* populate interface data */
+	for (i = 0; i < ifconf.ifc_len / sizeof(struct ifreq); i++) {
+		struct ifreq *ifreq = &ifconf.ifc_req[i];
+		struct interface iface;
+
+		strncpy(iface.ifname, ifreq->ifr_name, IFNAMSIZ);
+
+		rc = get_ifindex(inarp->socket, iface.ifname, &iface.ifindex);
+		if (rc)
+			continue;
+
+		rc = get_local_hwaddr(inarp->socket, iface.ifname,
+				&iface.eth_addr);
+		if (rc)
+			continue;
+
+		inarp->n_interfaces++;
+		inarp->interfaces = realloc(inarp->interfaces,
+				sizeof(*inarp->interfaces) *
+					inarp->n_interfaces);
+		memcpy(&inarp->interfaces[inarp->n_interfaces - 1],
+				&iface, sizeof(iface));
+	}
+
+	free(ifconf.ifc_buf);
+
+	if (!inarp->n_interfaces) {
+		warnx("No interfaces defined");
+		return -1;
+	}
+
+	printf("%d interfaces found:\n", inarp->n_interfaces);
+	for (i = 0; i < inarp->n_interfaces; i++) {
+		struct interface *iface = &inarp->interfaces[i];
+		printf(" %d: %-*s [%s]\n", iface->ifindex,
+				IFNAMSIZ,
+				iface->ifname,
+				eth_mac_to_str(&iface->eth_addr));
+	}
+
+	return 0;
 }
 
-int main(int argc, char **argv)
+static struct interface *find_interface_by_ifindex(struct inarp_ctx *inarp,
+		int ifindex)
+{
+	unsigned int i;
+
+	for (i = 0; i < inarp->n_interfaces; i++) {
+		struct interface *iface = &inarp->interfaces[i];
+		if (iface->ifindex == ifindex)
+			return iface;
+	}
+
+	return NULL;
+}
+
+int main(void)
 {
 	struct arp_packet inarp_req;
 	struct in_addr local_ip;
-	struct inarp_ctx inarp;
 	struct interface *iface;
+	struct sockaddr_ll addr;
+	struct inarp_ctx inarp;
+	socklen_t addrlen;
 	ssize_t len;
 	int ret;
 
-	if (argc < 2) {
-		usage(argv[0]);
-		return EXIT_FAILURE;
-	}
-
-	if (strlen(argv[1]) > IFNAMSIZ)
-		errx(EXIT_FAILURE, "Interface name '%s' is invalid",
-				argv[1]);
-
 	memset(&inarp, 0, sizeof(inarp));
-
-	/* prepare for a single interface */
-	inarp.interfaces = calloc(1, sizeof(inarp.interfaces[0]));
-	inarp.n_interfaces = 1;
-	iface = &inarp.interfaces[0];
-
-	strncpy(iface->ifname, argv[1], sizeof(iface->ifname));
 
 	inarp.socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
 	if (inarp.socket < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
-	ret = get_ifindex(inarp.socket, iface->ifname, &iface->ifindex);
+	ret = init_interfaces(&inarp);
 	if (ret)
 		exit(EXIT_FAILURE);
-
-	ret = get_local_hwaddr(inarp.socket, iface->ifname, &iface->eth_addr);
-	if (ret)
-		exit(EXIT_FAILURE);
-
-	printf("%s MAC address: %s\n", iface->ifname,
-			eth_mac_to_str(&iface->eth_addr));
 
 	while (1) {
+		addrlen = sizeof(addr);
 		len = recvfrom(inarp.socket, &inarp_req, sizeof(inarp_req), 0,
-				NULL, NULL);
+				(struct sockaddr *)&addr, &addrlen);
 		if (len <= 0) {
 			if (errno == EINTR)
 				continue;
 			err(EXIT_FAILURE, "Error recieving ARP packet");
 		}
+
+		/*
+		 * struct sockaddr_ll allows for 8 bytes of hardware address;
+		 * we only need ETH_ALEN for a full ethernet address.
+		 */
+		if (addrlen < sizeof(addr) - (8 - ETH_ALEN))
+			continue;
+
+		if (addr.sll_family != AF_PACKET)
+			continue;
+
+		iface = find_interface_by_ifindex(&inarp, addr.sll_ifindex);
+		if (!iface)
+			continue;
 
 		/* Is this packet large enough for an inarp? */
 		if ((size_t)len < sizeof(inarp_req))
@@ -261,6 +353,7 @@ int main(int argc, char **argv)
 		if (ret)
 			continue;
 
+		printf("local mac: %s\n", eth_mac_to_str(&iface->eth_addr));
 		printf("local ip: %s\n", inet_ntoa(local_ip));
 
 		send_arp_packet(inarp.socket, iface->ifindex,
