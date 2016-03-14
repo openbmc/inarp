@@ -18,12 +18,14 @@
 #include <err.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
 
 #include <sys/ioctl.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 
 #include <arpa/inet.h>
@@ -31,7 +33,10 @@
 
 #include <linux/if_arp.h>
 #include <linux/if_ether.h>
+#include <linux/if_link.h>
 #include <linux/if_packet.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
 
 struct eth_addr {
 	uint8_t		eth_addr[ETH_ALEN];
@@ -54,9 +59,20 @@ struct interface {
 
 struct inarp_ctx {
 	int			arp_sd;
+	int			nl_sd;
 	struct interface	*interfaces;
 	unsigned int		n_interfaces;
 };
+
+/* helpers for rtnetlink message iteration */
+#define for_each_nlmsg(buf, nlmsg, len) \
+	for (nlmsg = (struct nlmsghdr *)buf; \
+		NLMSG_OK(nlmsg, len) && nlmsg->nlmsg_type != NLMSG_DONE; \
+		nlmsg = NLMSG_NEXT(nlmsg, len))
+
+#define for_each_rta(buf, rta, attrlen) \
+	for (rta = (struct rtattr *)(buf); RTA_OK(rta, attrlen); \
+			rta = RTA_NEXT(rta, attrlen))
 
 static int send_arp_packet(int fd,
 		int ifindex,
@@ -154,125 +170,6 @@ static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
 	return 0;
 }
 
-static int get_local_hwaddr(int fd, const char *ifname, struct eth_addr *addr)
-{
-	struct ifreq ifreq;
-	int rc;
-
-	rc = do_ifreq(fd, SIOCGIFHWADDR, ifname, &ifreq);
-	if (rc) {
-		warn("Error querying local MAC address for %s", ifname);
-		return -1;
-	}
-
-	memcpy(addr, ifreq.ifr_hwaddr.sa_data, ETH_ALEN);
-	return 0;
-}
-
-static int get_ifindex(int fd, const char *ifname, int *ifindex)
-{
-	struct ifreq ifreq;
-	int rc;
-
-	rc = do_ifreq(fd, SIOCGIFINDEX, ifname, &ifreq);
-	if (rc < 0) {
-		warn("Error querying interface %s", ifname);
-		return -1;
-	}
-
-	*ifindex = ifreq.ifr_ifindex;
-	return 0;
-}
-
-static int init_interfaces(struct inarp_ctx *inarp)
-{
-	int alloc_len, rc, retry = 3;
-	struct ifconf ifconf;
-	unsigned int i;
-
-	/* find the names of all interfaces */
-	for (;;) {
-		ifconf.ifc_len = 0;
-		ifconf.ifc_buf = NULL;
-		rc = ioctl(inarp->arp_sd, SIOCGIFCONF, &ifconf);
-		if (rc < 0) {
-			warn("Error querying interface configuration size");
-			return -1;
-		}
-
-		/* the only way we can detect truncated ifconf data is by
-		 * allocating for one extra ifreq, then seeing if it gets
-		 * filled; if so, subsequent ones may have been dropped.
-		 */
-		alloc_len = ifconf.ifc_len + sizeof(struct ifreq);
-
-		ifconf.ifc_len = alloc_len;
-		ifconf.ifc_buf = malloc(alloc_len);
-
-		rc = ioctl(inarp->arp_sd, SIOCGIFCONF, &ifconf);
-		if (rc < 0) {
-			warn("Error quering interface configuration");
-			free(ifconf.ifc_buf);
-			return -1;
-		}
-
-		if (ifconf.ifc_len < alloc_len)
-			break;
-
-		if (retry--) {
-			/* we may have lost ifconf data, as our buffer was
-			 * full; retry */
-			free(ifconf.ifc_buf);
-			continue;
-		}
-
-		warnx("Can't allocate data for interface configuration");
-		return -1;
-	}
-
-	/* populate interface data */
-	for (i = 0; i < ifconf.ifc_len / sizeof(struct ifreq); i++) {
-		struct ifreq *ifreq = &ifconf.ifc_req[i];
-		struct interface iface;
-
-		strncpy(iface.ifname, ifreq->ifr_name, IFNAMSIZ);
-
-		rc = get_ifindex(inarp->arp_sd, iface.ifname, &iface.ifindex);
-		if (rc)
-			continue;
-
-		rc = get_local_hwaddr(inarp->arp_sd, iface.ifname,
-				&iface.eth_addr);
-		if (rc)
-			continue;
-
-		inarp->n_interfaces++;
-		inarp->interfaces = realloc(inarp->interfaces,
-				sizeof(*inarp->interfaces) *
-					inarp->n_interfaces);
-		memcpy(&inarp->interfaces[inarp->n_interfaces - 1],
-				&iface, sizeof(iface));
-	}
-
-	free(ifconf.ifc_buf);
-
-	if (!inarp->n_interfaces) {
-		warnx("No interfaces defined");
-		return -1;
-	}
-
-	printf("%d interfaces found:\n", inarp->n_interfaces);
-	for (i = 0; i < inarp->n_interfaces; i++) {
-		struct interface *iface = &inarp->interfaces[i];
-		printf(" %d: %-*s [%s]\n", iface->ifindex,
-				IFNAMSIZ,
-				iface->ifname,
-				eth_mac_to_str(&iface->eth_addr));
-	}
-
-	return 0;
-}
-
 static struct interface *find_interface_by_ifindex(struct inarp_ctx *inarp,
 		int ifindex)
 {
@@ -287,15 +184,225 @@ static struct interface *find_interface_by_ifindex(struct inarp_ctx *inarp,
 	return NULL;
 }
 
-int main(void)
+static int init_netlink(struct inarp_ctx *inarp)
+{
+	struct sockaddr_nl addr;
+	int rc;
+	struct {
+		struct nlmsghdr nlmsg;
+		struct rtgenmsg rtmsg;
+	} msg;
+
+	/* create our socket to listen for rtnetlink events */
+	inarp->nl_sd = socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
+	if (inarp->nl_sd < 0) {
+		warn("Error opening netlink socket");
+		return -1;
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.nl_family = AF_NETLINK;
+	addr.nl_groups = RTMGRP_LINK;
+
+	rc = bind(inarp->nl_sd, (struct sockaddr *)&addr, sizeof(addr));
+	if (rc) {
+		warn("Error binding to netlink address");
+		goto err_close;
+	}
+
+	/* send a query for current interfaces */
+	memset(&msg, 0, sizeof(msg));
+
+	msg.nlmsg.nlmsg_len = sizeof(msg);
+	msg.nlmsg.nlmsg_type = RTM_GETLINK;
+	msg.nlmsg.nlmsg_flags = NLM_F_REQUEST | NLM_F_ROOT;
+	msg.rtmsg.rtgen_family = AF_UNSPEC;
+
+	rc = send(inarp->nl_sd, &msg, sizeof(msg), MSG_NOSIGNAL);
+	if (rc != sizeof(msg)) {
+		warn("Failed to query current links");
+		goto err_close;
+	}
+
+	return 0;
+
+err_close:
+	close(inarp->nl_sd);
+	return -1;
+}
+
+static void netlink_nlmsg_dellink(struct inarp_ctx *inarp,
+		struct interface *iface)
+{
+	int i;
+
+	if (!iface)
+		return;
+
+	printf("dropping interface: %s, [%s]\n", iface->ifname,
+			eth_mac_to_str(&iface->eth_addr));
+
+	/* find the index of the array element to remove */
+	i = iface - inarp->interfaces;
+
+	/* remove interface from our array */
+	inarp->n_interfaces--;
+	inarp->interfaces = realloc(inarp->interfaces,
+			inarp->n_interfaces * sizeof(*iface));
+	memmove(iface, iface + 1,
+			sizeof(*iface) * (inarp->n_interfaces - i));
+
+}
+static void netlink_nlmsg_newlink(struct inarp_ctx *inarp,
+		struct interface *iface, struct ifinfomsg *ifmsg, int len)
+{
+	struct rtattr *attr;
+	bool new = false;
+
+	/*
+	 * We shouldn't already have an interface for this ifindex; so create
+	 * one. If we do, we'll update the hwaddr and name to the new values.
+	 */
+	if (!iface) {
+		inarp->n_interfaces++;
+		inarp->interfaces = realloc(inarp->interfaces,
+				inarp->n_interfaces * sizeof(*iface));
+		iface = &inarp->interfaces[inarp->n_interfaces-1];
+		new = true;
+	}
+
+	memset(iface, 0, sizeof(*iface));
+	iface->ifindex = ifmsg->ifi_index;
+
+	for_each_rta(ifmsg + 1, attr, len) {
+		void *data = RTA_DATA(attr);
+
+		switch (attr->rta_type) {
+		case IFLA_ADDRESS:
+			memcpy(&iface->eth_addr.eth_addr, data,
+					sizeof(iface->eth_addr.eth_addr));
+			break;
+
+		case IFLA_IFNAME:
+			strncpy(iface->ifname, data, IFNAMSIZ);
+			break;
+		}
+	}
+
+	printf("%s interface: %s, [%s]\n",
+			new ? "adding" : "updating",
+			iface->ifname,
+			eth_mac_to_str(&iface->eth_addr));
+	fflush(stdout);
+}
+
+static void netlink_nlmsg(struct inarp_ctx *inarp, struct nlmsghdr *nlmsg)
+{
+	struct ifinfomsg *ifmsg;
+	struct interface *iface;
+	int len;
+
+	len = nlmsg->nlmsg_len - sizeof(*ifmsg);
+	ifmsg = NLMSG_DATA(nlmsg);
+
+	iface = find_interface_by_ifindex(inarp, ifmsg->ifi_index);
+
+	switch (nlmsg->nlmsg_type) {
+	case RTM_DELLINK:
+		netlink_nlmsg_dellink(inarp, iface);
+		break;
+	case RTM_NEWLINK:
+		netlink_nlmsg_newlink(inarp, iface, ifmsg, len);
+		break;
+	default:
+		break;
+	}
+}
+
+static void netlink_recv(struct inarp_ctx *inarp)
+{
+	struct nlmsghdr *nlmsg;
+	uint8_t buf[16384];
+	int len;
+
+	len = recv(inarp->nl_sd, &buf, sizeof(buf), 0);
+	if (len < 0) {
+		warn("Error receiving netlink msg");
+		return;
+	}
+
+	for_each_nlmsg(buf, nlmsg, len)
+		netlink_nlmsg(inarp, nlmsg);
+}
+
+static void arp_recv(struct inarp_ctx *inarp)
 {
 	struct arp_packet inarp_req;
+	struct sockaddr_ll addr;
 	struct in_addr local_ip;
 	struct interface *iface;
-	struct sockaddr_ll addr;
-	struct inarp_ctx inarp;
 	socklen_t addrlen;
-	ssize_t len;
+	int len, rc;
+
+	addrlen = sizeof(addr);
+	len = recvfrom(inarp->arp_sd, &inarp_req,
+			sizeof(inarp_req), 0,
+			(struct sockaddr *)&addr, &addrlen);
+	if (len <= 0) {
+		if (errno == EINTR)
+			return;
+		err(EXIT_FAILURE, "Error recieving ARP packet");
+	}
+
+	/*
+	 * struct sockaddr_ll allows for 8 bytes of hardware address;
+	 * we only need ETH_ALEN for a full ethernet address.
+	 */
+	if (addrlen < sizeof(addr) - (8 - ETH_ALEN))
+		return;
+
+	if (addr.sll_family != AF_PACKET)
+		return;
+
+	iface = find_interface_by_ifindex(inarp, addr.sll_ifindex);
+	if (!iface)
+		return;
+
+	/* Is this packet large enough for an inarp? */
+	if ((size_t)len < sizeof(inarp_req))
+		return;
+
+	/* ... is it an inarp request? */
+	if (ntohs(inarp_req.arp.ar_op) != ARPOP_InREQUEST)
+		return;
+
+	/* ... for us? */
+	if (memcmp(&iface->eth_addr, inarp_req.eh.h_dest, ETH_ALEN))
+		return;
+
+	printf("src mac:  %s\n", eth_mac_to_str(&inarp_req.src_mac));
+	printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
+
+	rc = get_local_ipaddr(inarp->arp_sd, iface->ifname,
+			&local_ip);
+	/* if we don't have a local IP address to send, just drop the
+	 * request */
+	if (rc)
+		return;
+
+	printf("local mac: %s\n", eth_mac_to_str(&iface->eth_addr));
+	printf("local ip: %s\n", inet_ntoa(local_ip));
+
+	send_arp_packet(inarp->arp_sd, iface->ifindex,
+			&inarp_req.dest_mac,
+			&local_ip,
+			&inarp_req.src_mac,
+			&inarp_req.src_ip);
+}
+
+int main(void)
+{
+	struct inarp_ctx inarp;
 	int ret;
 
 	memset(&inarp, 0, sizeof(inarp));
@@ -304,66 +411,31 @@ int main(void)
 	if (inarp.arp_sd < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
-	ret = init_interfaces(&inarp);
+	ret = init_netlink(&inarp);
 	if (ret)
 		exit(EXIT_FAILURE);
 
 	while (1) {
-		addrlen = sizeof(addr);
-		len = recvfrom(inarp.arp_sd, &inarp_req,
-				sizeof(inarp_req), 0,
-				(struct sockaddr *)&addr, &addrlen);
-		if (len <= 0) {
-			if (errno == EINTR)
-				continue;
-			err(EXIT_FAILURE, "Error recieving ARP packet");
-		}
+		struct pollfd pollfds[2];
 
-		/*
-		 * struct sockaddr_ll allows for 8 bytes of hardware address;
-		 * we only need ETH_ALEN for a full ethernet address.
-		 */
-		if (addrlen < sizeof(addr) - (8 - ETH_ALEN))
-			continue;
+		pollfds[0].fd = inarp.arp_sd;
+		pollfds[0].events = POLLIN;
+		pollfds[1].fd = inarp.nl_sd;
+		pollfds[1].events = POLLIN;
 
-		if (addr.sll_family != AF_PACKET)
-			continue;
+		ret = poll(pollfds, 2, -1);
+		if (ret < 0)
+			err(EXIT_FAILURE, "Poll failed");
 
-		iface = find_interface_by_ifindex(&inarp, addr.sll_ifindex);
-		if (!iface)
-			continue;
+		if (pollfds[0].revents)
+			arp_recv(&inarp);
 
-		/* Is this packet large enough for an inarp? */
-		if ((size_t)len < sizeof(inarp_req))
-			continue;
+		if (pollfds[1].revents)
+			netlink_recv(&inarp);
 
-		/* ... is it an inarp request? */
-		if (ntohs(inarp_req.arp.ar_op) != ARPOP_InREQUEST)
-			continue;
 
-		/* ... for us? */
-		if (memcmp(&iface->eth_addr, inarp_req.eh.h_dest, ETH_ALEN))
-			continue;
-
-		printf("src mac:  %s\n", eth_mac_to_str(&inarp_req.src_mac));
-		printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
-
-		ret = get_local_ipaddr(inarp.arp_sd, iface->ifname,
-				&local_ip);
-		/* if we don't have a local IP address to send, just drop the
-		 * request */
-		if (ret)
-			continue;
-
-		printf("local mac: %s\n", eth_mac_to_str(&iface->eth_addr));
-		printf("local ip: %s\n", inet_ntoa(local_ip));
-
-		send_arp_packet(inarp.arp_sd, iface->ifindex,
-				&inarp_req.dest_mac,
-				&local_ip,
-				&inarp_req.src_mac,
-				&inarp_req.src_ip);
 	}
 	close(inarp.arp_sd);
+	close(inarp.nl_sd);
 	return 0;
 }
