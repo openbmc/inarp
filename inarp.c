@@ -15,12 +15,13 @@
  * limitations under the License.
  ******************************************************************************/
 
-#include <err.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -62,7 +63,30 @@ struct inarp_ctx {
 	int			nl_sd;
 	struct interface	*interfaces;
 	unsigned int		n_interfaces;
+	bool			syslog;
+	bool			debug;
 };
+
+static __attribute__((format(printf, 3, 4)))
+	void inarp_log(struct inarp_ctx *inarp,
+		int priority,
+		const char *format, ...)
+{
+	va_list ap;
+
+	if (priority > LOG_INFO && !inarp->debug)
+		return;
+
+	va_start(ap, format);
+	if (inarp->syslog) {
+		vsyslog(priority, format, ap);
+	} else {
+		vprintf(format, ap);
+		printf("\n");
+	}
+
+	va_end(ap);
+}
 
 /* helpers for rtnetlink message iteration */
 #define for_each_nlmsg(buf, nlmsg, len) \
@@ -74,7 +98,7 @@ struct inarp_ctx {
 	for (rta = (struct rtattr *)(buf); RTA_OK(rta, attrlen); \
 			rta = RTA_NEXT(rta, attrlen))
 
-static int send_arp_packet(int fd,
+static int send_arp_packet(struct inarp_ctx *inarp,
 		int ifindex,
 		const struct eth_addr *src_mac,
 		const struct in_addr *src_ip,
@@ -117,10 +141,11 @@ static int send_arp_packet(int fd,
 	memcpy(&arp.dest_ip, dest_ip, sizeof(arp.dest_ip));
 
 	/* send the packet */
-	rc = sendto(fd, &arp, sizeof(arp), 0,
+	rc = sendto(inarp->arp_sd, &arp, sizeof(arp), 0,
 			(struct sockaddr *)&addr, sizeof(addr));
 	if (rc < 0)
-		warn("failure sending ARP response");
+		inarp_log(inarp, LOG_NOTICE,
+				"Failure sending ARP response: %m");
 
 	return rc;
 }
@@ -147,21 +172,25 @@ static int do_ifreq(int fd, unsigned long type,
 	return ioctl(fd, type, ifreq);
 }
 
-static int get_local_ipaddr(int fd, const char *ifname, struct in_addr *addr)
+static int get_local_ipaddr(struct inarp_ctx *inarp,
+		const char *ifname, struct in_addr *addr)
 {
 	struct sockaddr_in *sa;
 	struct ifreq ifreq;
 	int rc;
 
-	rc = do_ifreq(fd, SIOCGIFADDR, ifname, &ifreq);
+	rc = do_ifreq(inarp->arp_sd, SIOCGIFADDR, ifname, &ifreq);
 	if (rc) {
-		warn("Error querying local IP address for %s", ifname);
+		inarp_log(inarp, LOG_WARNING,
+			"Error querying local IP address for %s: %m",
+			ifname);
 		return -1;
 	}
 
 	if (ifreq.ifr_addr.sa_family != AF_INET) {
-		warnx("Unknown address family %d in address response",
-				ifreq.ifr_addr.sa_family);
+		inarp_log(inarp, LOG_WARNING,
+			"Unknown address family %d in address response",
+			ifreq.ifr_addr.sa_family);
 		return -1;
 	}
 
@@ -196,7 +225,7 @@ static int init_netlink(struct inarp_ctx *inarp)
 	/* create our socket to listen for rtnetlink events */
 	inarp->nl_sd = socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
 	if (inarp->nl_sd < 0) {
-		warn("Error opening netlink socket");
+		inarp_log(inarp, LOG_ERR, "Error opening netlink socket: %m");
 		return -1;
 	}
 
@@ -206,7 +235,8 @@ static int init_netlink(struct inarp_ctx *inarp)
 
 	rc = bind(inarp->nl_sd, (struct sockaddr *)&addr, sizeof(addr));
 	if (rc) {
-		warn("Error binding to netlink address");
+		inarp_log(inarp, LOG_ERR,
+				"Error binding to netlink address: %m");
 		goto err_close;
 	}
 
@@ -220,7 +250,7 @@ static int init_netlink(struct inarp_ctx *inarp)
 
 	rc = send(inarp->nl_sd, &msg, sizeof(msg), MSG_NOSIGNAL);
 	if (rc != sizeof(msg)) {
-		warn("Failed to query current links");
+		inarp_log(inarp, LOG_ERR, "Failed to query current links: %m");
 		goto err_close;
 	}
 
@@ -239,8 +269,8 @@ static void netlink_nlmsg_dellink(struct inarp_ctx *inarp,
 	if (!iface)
 		return;
 
-	printf("dropping interface: %s, [%s]\n", iface->ifname,
-			eth_mac_to_str(&iface->eth_addr));
+	inarp_log(inarp, LOG_NOTICE, "dropping interface: %s, [%s]",
+			iface->ifname, eth_mac_to_str(&iface->eth_addr));
 
 	/* find the index of the array element to remove */
 	i = iface - inarp->interfaces;
@@ -289,11 +319,10 @@ static void netlink_nlmsg_newlink(struct inarp_ctx *inarp,
 		}
 	}
 
-	printf("%s interface: %s, [%s]\n",
+	inarp_log(inarp, LOG_NOTICE, "%s interface: %s, [%s]",
 			new ? "adding" : "updating",
 			iface->ifname,
 			eth_mac_to_str(&iface->eth_addr));
-	fflush(stdout);
 }
 
 static void netlink_nlmsg(struct inarp_ctx *inarp, struct nlmsghdr *nlmsg)
@@ -327,7 +356,7 @@ static void netlink_recv(struct inarp_ctx *inarp)
 
 	len = recv(inarp->nl_sd, &buf, sizeof(buf), 0);
 	if (len < 0) {
-		warn("Error receiving netlink msg");
+		inarp_log(inarp, LOG_NOTICE, "Error receiving netlink msg");
 		return;
 	}
 
@@ -351,7 +380,8 @@ static void arp_recv(struct inarp_ctx *inarp)
 	if (len <= 0) {
 		if (errno == EINTR)
 			return;
-		err(EXIT_FAILURE, "Error recieving ARP packet");
+		inarp_log(inarp, LOG_WARNING,
+				"Error recieving ARP packet");
 	}
 
 	/*
@@ -380,36 +410,51 @@ static void arp_recv(struct inarp_ctx *inarp)
 	if (memcmp(&iface->eth_addr, inarp_req.eh.h_dest, ETH_ALEN))
 		return;
 
-	printf("src mac:  %s\n", eth_mac_to_str(&inarp_req.src_mac));
-	printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
+	inarp_log(inarp, LOG_DEBUG,
+			"request from src mac: %s",
+			eth_mac_to_str(&inarp_req.src_mac));
 
-	rc = get_local_ipaddr(inarp->arp_sd, iface->ifname,
-			&local_ip);
+	rc = get_local_ipaddr(inarp, iface->ifname, &local_ip);
 	/* if we don't have a local IP address to send, just drop the
 	 * request */
 	if (rc)
 		return;
+	inarp_log(inarp, LOG_DEBUG,
+			"responding with %s ip %s",
+			eth_mac_to_str(&iface->eth_addr),
+			inet_ntoa(local_ip));
 
-	printf("local mac: %s\n", eth_mac_to_str(&iface->eth_addr));
-	printf("local ip: %s\n", inet_ntoa(local_ip));
-
-	send_arp_packet(inarp->arp_sd, iface->ifindex,
+	send_arp_packet(inarp, iface->ifindex,
 			&inarp_req.dest_mac,
 			&local_ip,
 			&inarp_req.src_mac,
 			&inarp_req.src_ip);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	struct inarp_ctx inarp;
-	int ret;
+	int ret, i;
 
 	memset(&inarp, 0, sizeof(inarp));
 
+	inarp.syslog = true;
+
+	for (i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "--debug"))
+			inarp.debug = true;
+		else if (!strcmp(argv[i], "--no-syslog"))
+			inarp.syslog = false;
+	}
+
+	if (inarp.syslog)
+		openlog("inarp", 0, LOG_DAEMON);
+
 	inarp.arp_sd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-	if (inarp.arp_sd < 0)
-		err(EXIT_FAILURE, "Error opening ARP socket");
+	if (inarp.arp_sd < 0) {
+		inarp_log(&inarp, LOG_ERR, "Error opening ARP socket");
+		exit(EXIT_FAILURE);
+	}
 
 	ret = init_netlink(&inarp);
 	if (ret)
@@ -424,8 +469,10 @@ int main(void)
 		pollfds[1].events = POLLIN;
 
 		ret = poll(pollfds, 2, -1);
-		if (ret < 0)
-			err(EXIT_FAILURE, "Poll failed");
+		if (ret < 0) {
+			inarp_log(&inarp, LOG_ERR, "poll failed, exiting");
+			break;
+		}
 
 		if (pollfds[0].revents)
 			arp_recv(&inarp);
