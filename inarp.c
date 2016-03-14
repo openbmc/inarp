@@ -53,7 +53,7 @@ struct interface {
 };
 
 struct inarp_ctx {
-	int			socket;
+	int			arp_sd;
 	struct interface	*interfaces;
 	unsigned int		n_interfaces;
 };
@@ -194,7 +194,7 @@ static int init_interfaces(struct inarp_ctx *inarp)
 	for (;;) {
 		ifconf.ifc_len = 0;
 		ifconf.ifc_buf = NULL;
-		rc = ioctl(inarp->socket, SIOCGIFCONF, &ifconf);
+		rc = ioctl(inarp->arp_sd, SIOCGIFCONF, &ifconf);
 		if (rc < 0) {
 			warn("Error querying interface configuration size");
 			return -1;
@@ -209,7 +209,7 @@ static int init_interfaces(struct inarp_ctx *inarp)
 		ifconf.ifc_len = alloc_len;
 		ifconf.ifc_buf = malloc(alloc_len);
 
-		rc = ioctl(inarp->socket, SIOCGIFCONF, &ifconf);
+		rc = ioctl(inarp->arp_sd, SIOCGIFCONF, &ifconf);
 		if (rc < 0) {
 			warn("Error quering interface configuration");
 			free(ifconf.ifc_buf);
@@ -237,11 +237,11 @@ static int init_interfaces(struct inarp_ctx *inarp)
 
 		strncpy(iface.ifname, ifreq->ifr_name, IFNAMSIZ);
 
-		rc = get_ifindex(inarp->socket, iface.ifname, &iface.ifindex);
+		rc = get_ifindex(inarp->arp_sd, iface.ifname, &iface.ifindex);
 		if (rc)
 			continue;
 
-		rc = get_local_hwaddr(inarp->socket, iface.ifname,
+		rc = get_local_hwaddr(inarp->arp_sd, iface.ifname,
 				&iface.eth_addr);
 		if (rc)
 			continue;
@@ -300,8 +300,8 @@ int main(void)
 
 	memset(&inarp, 0, sizeof(inarp));
 
-	inarp.socket = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
-	if (inarp.socket < 0)
+	inarp.arp_sd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP));
+	if (inarp.arp_sd < 0)
 		err(EXIT_FAILURE, "Error opening ARP socket");
 
 	ret = init_interfaces(&inarp);
@@ -310,7 +310,8 @@ int main(void)
 
 	while (1) {
 		addrlen = sizeof(addr);
-		len = recvfrom(inarp.socket, &inarp_req, sizeof(inarp_req), 0,
+		len = recvfrom(inarp.arp_sd, &inarp_req,
+				sizeof(inarp_req), 0,
 				(struct sockaddr *)&addr, &addrlen);
 		if (len <= 0) {
 			if (errno == EINTR)
@@ -347,7 +348,8 @@ int main(void)
 		printf("src mac:  %s\n", eth_mac_to_str(&inarp_req.src_mac));
 		printf("src ip:   %s\n", inet_ntoa(inarp_req.src_ip));
 
-		ret = get_local_ipaddr(inarp.socket, iface->ifname, &local_ip);
+		ret = get_local_ipaddr(inarp.arp_sd, iface->ifname,
+				&local_ip);
 		/* if we don't have a local IP address to send, just drop the
 		 * request */
 		if (ret)
@@ -356,12 +358,12 @@ int main(void)
 		printf("local mac: %s\n", eth_mac_to_str(&iface->eth_addr));
 		printf("local ip: %s\n", inet_ntoa(local_ip));
 
-		send_arp_packet(inarp.socket, iface->ifindex,
+		send_arp_packet(inarp.arp_sd, iface->ifindex,
 				&inarp_req.dest_mac,
 				&local_ip,
 				&inarp_req.src_mac,
 				&inarp_req.src_ip);
 	}
-	close(inarp.socket);
+	close(inarp.arp_sd);
 	return 0;
 }
