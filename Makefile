@@ -1,5 +1,5 @@
 
-CC = gcc
+CC ?= gcc
 CFLAGS = -Wall -Wextra -Werror
 INSTALL = install
 prefix = /usr/local
