@@ -1,6 +1,6 @@
 
 CC ?= gcc
-CFLAGS = -Wall -Wextra -Werror
+CFLAGS += -Wall -Wextra -Werror
 INSTALL = install
 prefix = /usr/local
 sbindir = ${prefix}/sbin
