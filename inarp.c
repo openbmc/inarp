@@ -360,7 +360,9 @@ static void netlink_recv(struct inarp_ctx *inarp)
 		return;
 	}
 
-	for_each_nlmsg(buf, nlmsg, len)
+	size_t len_unsigned = (size_t)len;
+
+	for_each_nlmsg(buf, nlmsg, len_unsigned)
 		netlink_nlmsg(inarp, nlmsg);
 }
 
