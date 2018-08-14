@@ -383,7 +383,7 @@ static void arp_recv(struct inarp_ctx *inarp)
 		if (errno == EINTR)
 			return;
 		inarp_log(inarp, LOG_WARNING,
-				"Error recieving ARP packet");
+				"Error receiving ARP packet");
 	}
 
 	/*
