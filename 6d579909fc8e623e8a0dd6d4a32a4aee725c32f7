@@ -1,0 +1,8 @@
+Code-Review+2: Jeremy Kerr <jk@ozlabs.org>
+Ok-To-Test+1: Jeremy Kerr <jk@ozlabs.org>
+Verified+1: Jeremy Kerr <jk@ozlabs.org>
+Submitted-by: Brad Bishop <bradleyb@fuzziesquirrel.com>
+Submitted-at: Thu, 01 Nov 2018 19:02:59 +0000
+Reviewed-on: https://gerrit.openbmc-project.xyz/15071
+Project: openbmc/inarp
+Branch: refs/heads/master
